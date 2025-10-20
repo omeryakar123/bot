@@ -1,0 +1,14 @@
+
+services:
+  - type: web
+    name: telegram-webapp-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:fastapi_app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBAPP_URL
+        sync: false
+      - key: ADMIN_ID
+        sync: false
