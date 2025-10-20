@@ -1,22 +1,19 @@
-import asyncio, hmac, hashlib, urllib.parse, os, json, logging
+import os, asyncio, hmac, hashlib, urllib.parse, json
+from threading import Thread
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from db import init_db, upsert_user, submit_score, get_user_score, get_leaderboard
-
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ---------- LOGGING ----------
-logging.basicConfig(level=logging.INFO)
-
-# ---------- ENV ----------
+# .env değişkenlerini yükle
 load_dotenv()
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-WEBAPP_URL = os.environ["WEBAPP_URL"]
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBAPP_URL = os.getenv("WEBAPP_URL")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# ---------- TELEGRAM BOT ----------
+# Telegram Bot
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id, user.username, user.first_name, user.last_name)
@@ -26,7 +23,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Aşağıdaki butonla oyunu hemen Telegram içinde açabilirsin.",
         reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
     )
-
 
 async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     score = get_user_score(update.effective_user.id)
@@ -40,13 +36,19 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"{i+1}. {name or 'Anonim'} — {score}" for i, (_, name, score) in enumerate(rows)]
     await update.message.reply_text("🏆 TOP 10\n" + "\n".join(lines))
 
-# ---------- BOT UYGULAMASI ----------
-application = ApplicationBuilder().token(BOT_TOKEN).build()
+# Telegram Application
+application = Application.builder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("me", me))
 application.add_handler(CommandHandler("top", top))
 
-# ---------- FASTAPI ----------
+# Botu arka planda çalıştır
+def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(application.run_polling())
+
+# FastAPI backend
 fastapi_app = FastAPI(title="Telegram WebApp Bot Backend")
 
 class ScorePayload(BaseModel):
@@ -54,20 +56,16 @@ class ScorePayload(BaseModel):
     score: int = Field(..., ge=0)
 
 @fastapi_app.on_event("startup")
-async def startup_event():
-    """Uygulama başlatıldığında DB ve botu başlat."""
+async def on_startup():
     init_db()
-
-    async def run_bot():
-        await application.run_polling(stop_signals=None, close_loop=False)
-
-    asyncio.get_running_loop().create_task(run_bot())
+    print("🚀 Database initialized")
+    print("🤖 Starting Telegram bot polling thread...")
+    Thread(target=run_bot, daemon=True).start()
 
 @fastapi_app.get("/")
 async def root():
     return {"ok": True, "bot": "running"}
 
-# ---------- WEBAPP DOĞRULAMA ----------
 def validate_telegram_data(init_data: str, token: str):
     parsed = urllib.parse.parse_qs(init_data, strict_parsing=True)
     if "hash" not in parsed:
@@ -83,7 +81,6 @@ def validate_telegram_data(init_data: str, token: str):
     user_json = parsed.get("user", [None])[0]
     return json.loads(user_json)
 
-# ---------- API ----------
 @fastapi_app.post("/api/submit_score")
 async def submit_score_api(payload: ScorePayload):
     try:
@@ -97,10 +94,6 @@ async def submit_score_api(payload: ScorePayload):
 @fastapi_app.get("/api/leaderboard")
 async def leaderboard_api():
     rows = get_leaderboard()
-    return {
-        "ok": True,
-        "leaderboard": [
-            {"user_id": uid, "name": name, "score": score}
-            for uid, name, score in rows
-        ],
-    }
+    return {"ok": True, "leaderboard": [
+        {"user_id": uid, "name": name, "score": score} for uid, name, score in rows
+    ]}
