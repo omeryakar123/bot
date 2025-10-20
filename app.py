@@ -1,5 +1,4 @@
 import os, asyncio, hmac, hashlib, urllib.parse, json
-from threading import Thread
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -13,7 +12,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBAPP_URL = os.getenv("WEBAPP_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# Telegram Bot
+# Telegram bot komutları
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id, user.username, user.first_name, user.last_name)
@@ -36,17 +35,11 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"{i+1}. {name or 'Anonim'} — {score}" for i, (_, name, score) in enumerate(rows)]
     await update.message.reply_text("🏆 TOP 10\n" + "\n".join(lines))
 
-# Telegram Application
+# Telegram bot app
 application = Application.builder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("me", me))
 application.add_handler(CommandHandler("top", top))
-
-# Botu arka planda çalıştır
-def run_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(application.run_polling())
 
 # FastAPI backend
 fastapi_app = FastAPI(title="Telegram WebApp Bot Backend")
@@ -56,15 +49,23 @@ class ScorePayload(BaseModel):
     score: int = Field(..., ge=0)
 
 @fastapi_app.on_event("startup")
-async def on_startup():
+async def startup_event():
     init_db()
     print("🚀 Database initialized")
-    print("🤖 Starting Telegram bot polling thread...")
-    Thread(target=run_bot, daemon=True).start()
+    asyncio.create_task(run_bot())  # artık thread değil, async task
 
 @fastapi_app.get("/")
 async def root():
     return {"ok": True, "bot": "running"}
+
+async def run_bot():
+    print("🤖 Telegram bot polling started (async mode)")
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    # sonsuza kadar çalışsın:
+    while True:
+        await asyncio.sleep(3600)
 
 def validate_telegram_data(init_data: str, token: str):
     parsed = urllib.parse.parse_qs(init_data, strict_parsing=True)
